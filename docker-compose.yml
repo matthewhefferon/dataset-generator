@@ -11,6 +11,13 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dataset_generator"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   metabase:
     image: metabase/metabase:latest
@@ -26,7 +33,38 @@ services:
       MB_DB_PASS: postgres
       MB_DB_HOST: db
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    container_name: dataset_generator_litellm
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "8"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-1234}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-sk-1234}
+      DATABASE_URL: "postgresql://postgres:postgres@db:5432/litellm"
+      STORE_MODEL_IN_DB: "True"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_GENAI_API_KEY: ${GOOGLE_GENAI_API_KEY:-}
+      AZURE_API_KEY: ${AZURE_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
 
 volumes:
   pgdata:

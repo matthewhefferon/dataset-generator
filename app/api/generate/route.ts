@@ -1,13 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
-import { OpenAI } from "openai";
-import {
-  generateSpecPrompt,
-  GenerateSpecPromptParams,
-} from "@/lib/spec-prompts";
-import { DataFactory } from "@/lib/data-factory";
+import { NextRequest, NextResponse } from 'next/server';
+import { OpenAI } from 'openai';
+import { generateSpecPrompt, GenerateSpecPromptParams } from '@/lib/spec-prompts';
+import { DataFactory } from '@/lib/data-factory';
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.LITELLM_MASTER_KEY || 'sk-1234',
+  baseURL: process.env.LLM_ENDPOINT || 'http://localhost:4000',
 });
 
 export async function POST(req: Request) {
@@ -30,10 +28,7 @@ export async function POST(req: Request) {
 
     // Validate required fields
     if (!businessType) {
-      return NextResponse.json(
-        { error: "Missing required field: businessType" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Missing required field: businessType' }, { status: 400 });
     }
 
     // 1. Generate the spec from the LLM
@@ -57,21 +52,21 @@ export async function POST(req: Request) {
     const outputCost = (estimatedOutputTokens / 1000) * 0.015;
     const totalEstimatedCost = inputCost + outputCost;
 
-    // OpenAI API timeout (60s)
+    // LiteLLM timeout (60s)
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
 
     let completion;
     try {
       completion = await openai.chat.completions.create({
-        model: "gpt-4o",
+        model: process.env.LLM_MODEL || 'gpt-4o',
         messages: [
           {
-            role: "system",
+            role: 'user',
             content: prompt,
           },
         ],
-        response_format: { type: "json_object" },
+        response_format: { type: 'json_object' },
       });
     } finally {
       clearTimeout(timeout);
@@ -79,14 +74,10 @@ export async function POST(req: Request) {
 
     const content = completion.choices[0].message.content;
     if (!content) {
-      throw new Error("No spec generated from OpenAI");
+      throw new Error('No spec generated from LLM');
     }
     const spec = JSON.parse(content);
-    if (
-      spec.simulation &&
-      spec.simulation.initial_event &&
-      !spec.simulation.events[spec.simulation.initial_event]
-    ) {
+    if (spec.simulation && spec.simulation.initial_event && !spec.simulation.events[spec.simulation.initial_event]) {
       // Pick the first event as a fallback
       const firstEvent = Object.keys(spec.simulation.events)[0];
       spec.simulation.initial_event = firstEvent;
@@ -94,11 +85,7 @@ export async function POST(req: Request) {
 
     // 2. Generate data using the spec
     const factory = new DataFactory(spec);
-    const generatedData = factory.generate(
-      rowCount || 1000,
-      timeRange || [new Date().getFullYear().toString()],
-      schemaType
-    );
+    const generatedData = factory.generate(rowCount || 1000, timeRange || [new Date().getFullYear().toString()], schemaType);
 
     // Format the response
     const response = {
@@ -110,28 +97,26 @@ export async function POST(req: Request) {
         outputTokens: estimatedOutputTokens,
         actualTokens: completion.usage?.total_tokens || totalEstimatedTokens,
         actualCost: completion.usage
-          ? (completion.usage.prompt_tokens / 1000) * 0.005 +
-            (completion.usage.completion_tokens / 1000) * 0.015
+          ? (completion.usage.prompt_tokens / 1000) * 0.005 + (completion.usage.completion_tokens / 1000) * 0.015
           : totalEstimatedCost,
       },
     };
 
     // Log cost for transparency
     const actualCost = completion.usage
-      ? (completion.usage.prompt_tokens / 1000) * 0.005 +
-        (completion.usage.completion_tokens / 1000) * 0.015
+      ? (completion.usage.prompt_tokens / 1000) * 0.005 + (completion.usage.completion_tokens / 1000) * 0.015
       : totalEstimatedCost;
 
     console.log(
-      `[Dataset Generation] Business: ${businessType}, Rows: ${rowCount}, Cost: $${actualCost.toFixed(
-        4
-      )}, Tokens: ${completion.usage?.total_tokens || "estimated"}`
+      `[Dataset Generation] Business: ${businessType}, Rows: ${rowCount}, Cost: $${actualCost.toFixed(4)}, Tokens: ${
+        completion.usage?.total_tokens || 'estimated'
+      }`
     );
 
     return NextResponse.json({ data: response });
   } catch (error) {
-    console.error("Error generating dataset:", error);
-    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error('Error generating dataset:', error);
+    const message = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
